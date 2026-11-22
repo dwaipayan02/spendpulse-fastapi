@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SpendPulse INR — React.js + FastAPI + SQLite</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useRef } = React;
+
+    const CATEGORIES = [
+      'Salary', 'Freelance', 'Investments',
+      'Food & Dining', 'Housing', 'Transport',
+      'Utilities', 'Entertainment', 'Shopping', 'Health', 'Other'
+    ];
+
+    const CATEGORY_COLORS = {
+      'Housing': '#6366f1',
+      'Food & Dining': '#f59e0b',
+      'Utilities': '#06b6d4',
+      'Transport': '#10b981',
+      'Health': '#ec4899',
+      'Entertainment': '#8b5cf6',
+      'Shopping': '#f97316',
+      'Other': '#64748b',
+    };
+
+    const formatINR = (val) =>
+      new Intl.NumberFormat('en-IN', {
+        style: 'currency',
+        currency: 'INR',
+        maximumFractionDigits: 2,
+      }).format(val || 0);
+
+    function ExpensePieChart({ breakdown }) {
+      const canvasRef = useRef(null);
+      const chartRef = useRef(null);
+
+      useEffect(() => {
+        if (!canvasRef.current) return;
+        if (chartRef.current) {
+          chartRef.current.destroy();
+          chartRef.current = null;
+        }
+        if (!breakdown || breakdown.length === 0) return;
+
+        const ctx = canvasRef.current.getContext('2d');
+        chartRef.current = new Chart(ctx, {
+          type: 'doughnut',
+          data: {
+            labels: breakdown.map((b) => b.category),
+            datasets: [{
+              data: breakdown.map((b) => b.amount),
+              backgroundColor: breakdown.map((b) => CATEGORY_COLORS[b.category] || '#64748b'),
+              borderColor: '#0f172a',
+              borderWidth: 2,
+              hoverOffset: 6,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '58%',
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => ` ${ctx.label}: ${formatINR(ctx.parsed)}`,
+                },
+              },
+            },
+          },
+        });
+
+        return () => {
+          if (chartRef.current) {
+            chartRef.current.destroy();
+            chartRef.current = null;
+          }
+        };
+      }, [breakdown]);
+
+      if (!breakdown || breakdown.length === 0) {
+        return (
+          <div className="h-56 flex items-center justify-center text-xs text-slate-400">
+            Add an expense to see the live Pie Chart update.
+          </div>
+        );
+      }
+
+      return (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
+          <div className="relative h-56 w-full">
+            <canvas ref={canvasRef}></canvas>
+          </div>
+          <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+            {breakdown.map((row) => (
+              <div key={row.category} className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    className="w-2.5 h-2.5 rounded-full shrink-0"
+                    style={{ backgroundColor: CATEGORY_COLORS[row.category] || '#64748b' }}
+                  />
+                  <span className="text-slate-300 truncate">{row.category}</span>
+                </div>
+                <span className="text-slate-400 font-medium shrink-0">
+                  {formatINR(row.amount)} ({row.share}%)
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    function AuthScreen({ onAuthenticated }) {
+      const [mode, setMode] = useState('login');
+      const [userId, setUserId] = useState('');
+      const [fullName, setFullName] = useState('');
+      const [password, setPassword] = useState('');
+      const [error, setError] = useState('');
+      const [submitting, setSubmitting] = useState(false);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setError('');
+        setSubmitting(true);
+        try {
+          const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
+          const payload = mode === 'login'
+            ? { user_id: userId, password }
+            : { user_id: userId, full_name: fullName, password };
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            setError(data.detail || 'Authentication failed');
+            return;
+          }
+          localStorage.setItem('spendpulse_token', data.token);
+          onAuthenticated(data.token, data.user);
+        } catch {
+          setError('Cannot reach FastAPI backend. Start it with: py -m uvicorn main:app --reload');
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      const fillDemo = () => {
+        setMode('login');
+        setUserId('demo');
+        setPassword('demo1234');
+        setError('');
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center px-4 py-10">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5 shadow-2xl">
+            <div className="text-center space-y-1">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 text-xs font-medium">
+                React.js + FastAPI + SQLite (₹ INR)
+              </div>
+              <h1 className="text-2xl font-bold text-white pt-1">SpendPulse Login</h1>
+              <p className="text-xs text-slate-400">
+                Credentials are verified against the SQLite <code className="text-indigo-300">users</code> table.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+              {['login', 'register'].map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => { setMode(tab); setError(''); }}
+                  className={`py-2 rounded-lg text-xs font-semibold transition ${
+                    mode === tab ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {tab === 'login' ? 'Sign In' : 'Create Account'}
+                </button>
+              ))}
+            </div>
+
+            {error && (
+              <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 text-xs text-rose-300">
+                {error}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmit} className="space-y-3.5">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">User ID</label>
+                <input
+                  type="text"
+                  value={userId}
+                  onChange={(e) => setUserId(e.target.value)}
+                  placeholder="e.g. demo"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  required
+                />
+              </div>
+
+              {mode === 'register' && (
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Full Name</label>
+                  <input
+                    type="text"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="e.g. Dwaipayan"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    required
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Minimum 6 characters"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold py-2.5 rounded-xl text-sm transition"
+              >
+                {submitting ? 'Checking SQLite...' : mode === 'login' ? 'Sign In' : 'Register & Sign In'}
+              </button>
+            </form>
+
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2 text-xs">
+              <div>
+                <p className="text-slate-300 font-medium">Demo Login</p>
+                <p className="text-slate-400 font-mono">ID: demo • Pass: demo1234</p>
+              </div>
+              <button
+                type="button"
+                onClick={fillDemo}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 font-medium shrink-0"
+              >
+                Auto-fill
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Dashboard({ token, user, onLogout }) {
+      const [transactions, setTransactions] = useState([]);
+      const [summary, setSummary] = useState({
+        totalIncome: 0, totalExpense: 0, balance: 0, savingsRate: 0, categoryBreakdown: []
+      });
+      const [sqlLogs, setSqlLogs] = useState([]);
+      const [filters, setFilters] = useState({ type: '', category: 'All', search: '' });
+      const [editingId, setEditingId] = useState(null);
+      const [toast, setToast] = useState(null);
+      const [formError, setFormError] = useState('');
+      const [form, setForm] = useState({
+        title: '', amount: '', type: 'expense', category: 'Food & Dining',
+        date: new Date().toISOString().slice(0, 10), notes: ''
+      });
+
+      const authHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+
+      const showToast = (msg, kind = 'success') => {
+        setToast({ msg, kind });
+        setTimeout(() => setToast(null), 3000);
+      };
+
+      const fetchAll = useCallback(async () => {
+        const params = new URLSearchParams();
+        if (filters.type) params.set('type', filters.type);
+        if (filters.category !== 'All') params.set('category', filters.category);
+        if (filters.search.trim()) params.set('search', filters.search.trim());
+        const qs = params.toString() ? `?${params.toString()}` : '';
+
+        const [txnRes, sumRes, logRes] = await Promise.all([
+          fetch(`/api/transactions${qs}`, { headers: authHeaders }),
+          fetch('/api/summary', { headers: authHeaders }),
+          fetch('/api/sql-log', { headers: authHeaders }),
+        ]);
+
+        if (txnRes.status === 401) {
+          onLogout();
+          return;
+        }
+
+        const txnJson = await txnRes.json();
+        const sumJson = await sumRes.json();
+        const logJson = await logRes.json();
+        setTransactions(txnJson.data || []);
+        setSummary(sumJson);
+        setSqlLogs(logJson.logs || []);
+      }, [filters, token]);
+
+      useEffect(() => { fetchAll(); }, [fetchAll]);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setFormError('');
+        const method = editingId ? 'PUT' : 'POST';
+        const url = editingId ? `/api/transactions/${editingId}` : '/api/transactions';
+        const res = await fetch(url, {
+          method,
+          headers: authHeaders,
+          body: JSON.stringify({ ...form, amount: Number(form.amount) }),
+        });
+        const body = await res.json();
+        if (!res.ok) {
+          const msg = Array.isArray(body.detail)
+            ? body.detail.map((d) => d.msg).join(', ')
+            : (body.detail || 'Validation failed');
+          setFormError(msg);
+          return;
+        }
+        setEditingId(null);
+        setForm({
+          title: '', amount: '', type: 'expense', category: 'Food & Dining',
+          date: new Date().toISOString().slice(0, 10), notes: ''
+        });
+        showToast(editingId ? 'Updated via FastAPI + SQL UPDATE' : 'Saved via FastAPI + SQL INSERT');
+        fetchAll();
+      };
+
+      const handleDelete = async (id) => {
+        const res = await fetch(`/api/transactions/${id}`, { method: 'DELETE', headers: authHeaders });
+        if (res.ok) {
+          showToast('Deleted via FastAPI + SQL DELETE');
+          fetchAll();
+        }
+      };
+
+      const startEdit = (item) => {
+        setEditingId(item.id);
+        setForm({
+          title: item.title,
+          amount: String(item.amount),
+          type: item.type,
+          category: item.category,
+          date: item.date,
+          notes: item.notes || '',
+        });
+        setFormError('');
+      };
+
+      return (
+        <div className="max-w-6xl mx-auto px-4 py-8 space-y-6">
+          {toast && (
+            <div className={`fixed top-5 right-5 z-50 px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg ${
+              toast.kind === 'error' ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'
+            }`}>
+              {toast.msg}
+            </div>
+          )}
+
+          <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-5">
+            <div>
+              <h1 className="text-2xl font-bold text-white">SpendPulse ₹</h1>
+              <p className="text-xs text-slate-400">
+                Signed in as <strong className="text-indigo-300">{user.full_name}</strong> (@{user.user_id}) • FastAPI + SQLite
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <a
+                href="/docs"
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-2 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 text-xs font-medium"
+              >
+                Swagger API Docs (/docs)
+              </a>
+              <button
+                onClick={onLogout}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200"
+              >
+                Sign Out
+              </button>
+            </div>
+          </header>
+
+          {/* KPI Cards */}
+          <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <p className="text-xs uppercase text-slate-400">Net Balance</p>
+              <p className="text-2xl font-bold mt-1 text-white">{formatINR(summary.balance)}</p>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <p className="text-xs uppercase text-slate-400">Total Income</p>
+              <p className="text-2xl font-bold mt-1 text-emerald-400">{formatINR(summary.totalIncome)}</p>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <p className="text-xs uppercase text-slate-400">Total Expenses</p>
+              <p className="text-2xl font-bold mt-1 text-rose-400">{formatINR(summary.totalExpense)}</p>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <p className="text-xs uppercase text-slate-400">Savings Rate</p>
+              <p className="text-2xl font-bold mt-1 text-indigo-400">{summary.savingsRate}%</p>
+            </div>
+          </section>
+
+          {/* Live Pie Chart + Add Form */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <form onSubmit={handleSubmit} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3.5">
+              <div className="flex items-center justify-between">
+                <h2 className="font-semibold text-white text-sm">
+                  {editingId ? `Edit Row #${editingId} (SQL UPDATE)` : 'Add Transaction (SQL INSERT)'}
+                </h2>
+                {editingId && (
+                  <button type="button" onClick={() => setEditingId(null)} className="text-xs text-slate-400 hover:text-white">
+                    Cancel
+                  </button>
+                )}
+              </div>
+
+              {formError && (
+                <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 text-xs text-rose-300">
+                  {formError}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                {['expense', 'income'].map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, type: t }))}
+                    className={`py-2 rounded-xl text-xs font-semibold capitalize border ${
+                      form.type === t
+                        ? t === 'income'
+                          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
+                          : 'bg-rose-500/20 border-rose-500 text-rose-300'
+                        : 'bg-slate-950 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+
+              <input
+                type="text"
+                placeholder="Title (e.g. Groceries, Rent, Salary)"
+                value={form.title}
+                onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                required
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  placeholder="Amount (₹)"
+                  value={form.amount}
+                  onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                  required
+                />
+                <input
+                  type="date"
+                  value={form.date}
+                  onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                  required
+                />
+              </div>
+              <select
+                value={form.category}
+                onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+              >
+                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <input
+                type="text"
+                placeholder="Notes (optional)"
+                value={form.notes}
+                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+              />
+              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-xl text-xs">
+                {editingId ? 'Save Changes (PUT)' : 'Add & Update Pie Chart (POST)'}
+              </button>
+            </form>
+
+            {/* Dynamic Pie Chart Card */}
+            <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
+              <div>
+                <h2 className="text-sm font-semibold text-white">Live Expense Breakdown (Pie Chart)</h2>
+                <p className="text-xs text-slate-400">
+                  Updates automatically from SQL <code className="text-cyan-300">GROUP BY category</code> whenever you add, edit, or delete a value.
+                </p>
+              </div>
+              <ExpensePieChart breakdown={summary.categoryBreakdown} />
+            </div>
+          </div>
+
+          {/* Transactions Table */}
+          <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+            <div className="flex flex-wrap gap-2">
+              <input
+                type="text"
+                placeholder="Search (SQL LIKE)..."
+                value={filters.search}
+                onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
+                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
+              />
+              <select
+                value={filters.type}
+                onChange={(e) => setFilters((f) => ({ ...f, type: e.target.value }))}
+                className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-white"
+              >
+                <option value="">All Types</option>
+                <option value="income">Income</option>
+                <option value="expense">Expense</option>
+              </select>
+              <select
+                value={filters.category}
+                onChange={(e) => setFilters((f) => ({ ...f, category: e.target.value }))}
+                className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-white"
+              >
+                <option value="All">All Categories</option>
+                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+
+            <div className="divide-y divide-slate-800 max-h-96 overflow-y-auto">
+              {transactions.length === 0 ? (
+                <p className="text-xs text-slate-400 text-center py-8">No matching rows in SQLite yet.</p>
+              ) : (
+                transactions.map((item) => (
+                  <div key={item.id} className="py-3 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-white truncate">{item.title}</p>
+                      <p className="text-xs text-slate-400">
+                        #{item.id} • {item.category} • {item.date} {item.notes ? `• ${item.notes}` : ''}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className={`text-sm font-semibold ${item.type === 'income' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {item.type === 'income' ? '+' : '-'}{formatINR(item.amount)}
+                      </span>
+                      <button onClick={() => startEdit(item)} className="text-xs text-indigo-400 hover:underline">Edit</button>
+                      <button onClick={() => handleDelete(item.id)} className="text-xs text-rose-400 hover:underline">Delete</button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+
+          {/* Live SQL Log */}
+          <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
+            <h3 className="text-sm font-semibold text-white">Live SQLite Commands Executed on FastAPI Backend</h3>
+            <div className="space-y-2 max-h-52 overflow-y-auto font-mono text-xs">
+              {sqlLogs.map((entry, idx) => (
+                <div key={idx} className="bg-slate-950 border border-slate-800 rounded-xl p-2.5">
+                  <p className="text-cyan-300">{entry.sql}</p>
+                  <p className="text-slate-500 text-[11px] mt-0.5">Params: [{entry.params.join(', ')}]</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    function App() {
+      const [token, setToken] = useState(() => localStorage.getItem('spendpulse_token') || '');
+      const [user, setUser] = useState(null);
+      const [checking, setChecking] = useState(Boolean(localStorage.getItem('spendpulse_token')));
+
+      useEffect(() => {
+        if (!token) { setChecking(false); return; }
+        fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
+          .then((r) => (r.ok ? r.json() : Promise.reject()))
+          .then((data) => setUser(data.user))
+          .catch(() => { localStorage.removeItem('spendpulse_token'); setToken(''); setUser(null); })
+          .finally(() => setChecking(false));
+      }, [token]);
+
+      const handleLogout = () => {
+        localStorage.removeItem('spendpulse_token');
+        setToken('');
+        setUser(null);
+      };
+
+      if (checking) {
+        return <div className="min-h-screen flex items-center justify-center text-sm text-slate-400">Checking session...</div>;
+      }
+
+      if (!token || !user) {
+        return <AuthScreen onAuthenticated={(t, u) => { setToken(t); setUser(u); }} />;
+      }
+
+      return <Dashboard token={token} user={user} onLogout={handleLogout} />;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
